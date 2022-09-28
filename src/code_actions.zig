@@ -33,6 +33,7 @@ pub const Builder = struct {
                 .@"capture" => try handleUnusedCapture(builder, actions, loc),
             },
             .non_camelcase_fn => try handleNonCamelcaseFunction(builder, actions, loc),
+            .non_pascalcase_type_fn => try handleNonPascalcaseFunction(builder, actions, loc),
             .pointless_discard => try handlePointlessDiscard(builder, actions, loc),
             .omit_discard => |id| switch (id) {
                 .@"index capture" => try handleUnusedIndexCapture(builder, actions, loc),
@@ -78,10 +79,27 @@ fn handleNonCamelcaseFunction(builder: *Builder, actions: *std.ArrayListUnmanage
 
     if (std.mem.allEqual(u8, identifier_name, '_')) return;
 
-    const new_text = try createCamelcaseText(builder.arena.allocator(), identifier_name);
+    const new_text = try createCamelPascalText(builder.arena.allocator(), identifier_name, .Camel);
 
     const action1 = types.CodeAction{
         .title = "make function name camelCase",
+        .kind = .QuickFix,
+        .isPreferred = true,
+        .edit = try builder.createWorkspaceEdit(&.{builder.createTextEditLoc(loc, new_text)}),
+    };
+
+    try actions.append(builder.arena.allocator(), action1);
+}
+
+fn handleNonPascalcaseFunction(builder: *Builder, actions: *std.ArrayListUnmanaged(types.CodeAction), loc: offsets.Loc) !void {
+    const identifier_name = offsets.locToSlice(builder.text(), loc);
+
+    if (std.mem.allEqual(u8, identifier_name, '_')) return;
+
+    const new_text = try createCamelPascalText(builder.arena.allocator(), identifier_name, .Pascal);
+
+    const action1 = types.CodeAction{
+        .title = "make type function name PascalCase",
         .kind = .QuickFix,
         .isPreferred = true,
         .edit = try builder.createWorkspaceEdit(&.{builder.createTextEditLoc(loc, new_text)}),
@@ -247,10 +265,12 @@ fn handlePointlessDiscard(builder: *Builder, actions: *std.ArrayListUnmanaged(ty
     });
 }
 
-// attempts to converts a slice of text into camelcase 'FUNCTION_NAME' -> 'functionName'
-fn createCamelcaseText(allocator: std.mem.Allocator, identifier: []const u8) ![]const u8 {
+// attempts to converts a slice of text into camelCase or pascalCase
+fn createCamelPascalText(allocator: std.mem.Allocator, identifier: []const u8, is_pascal: enum { Pascal, Camel }) ![]const u8 {
     // skip initial & ending underscores
     const trimmed_identifier = std.mem.trim(u8, identifier, "_");
+
+    if (trimmed_identifier.len == 0) return identifier;
 
     const num_separators = std.mem.count(u8, trimmed_identifier, "_");
 
@@ -273,6 +293,9 @@ fn createCamelcaseText(allocator: std.mem.Allocator, identifier: []const u8) ![]
 
         idx += 1;
     }
+
+    if (is_pascal == .Pascal)
+        new_text.items[0] = std.ascii.toUpper(new_text.items[0]);
 
     return new_text.toOwnedSlice(allocator);
 }
@@ -336,6 +359,7 @@ const DiagnosticKind = union(enum) {
     pointless_discard: IdCat,
     omit_discard: DiscardCat,
     non_camelcase_fn,
+    non_pascalcase_type_fn,
     undeclared_identifier,
     unreachable_code,
 
@@ -373,7 +397,10 @@ const DiagnosticKind = union(enum) {
             return .non_camelcase_fn;
         } else if (std.mem.startsWith(u8, msg, "use of undeclared identifier")) {
             return .undeclared_identifier;
+        } else if (std.mem.startsWith(u8, msg, "Type functions should be PascalCase")) {
+            return .non_pascalcase_type_fn;
         }
+
         return null;
     }
 
